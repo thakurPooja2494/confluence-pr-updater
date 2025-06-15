@@ -1,4 +1,3 @@
-// ConfluenceService.java
 package com.example.demo.service;
 
 import org.jsoup.Jsoup;
@@ -10,7 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class ConfluenceService {
@@ -33,17 +34,17 @@ public class ConfluenceService {
                                               String repoOwner, String repoName, int prNumber,
                                               boolean isMerged, boolean isClosed) {
         String status = isMerged ? "Merged" : (isClosed ? "Closed" : "In Review");
-        processConfluenceUpdate(title, prUrl, author, repoOwner, repoName, status, prNumber, !isClosed);
+        processConfluenceUpdate(title, prUrl, author, repoOwner, repoName, prNumber, status, !isClosed);
     }
 
     public void removePullRequestFromConfluence(String prUrl) {
-        processConfluenceUpdate(null, prUrl, null, null, null, null, -1, false);
+        processConfluenceUpdate(null, prUrl, null, null, null, -1, null, false);
     }
 
     @SuppressWarnings("unchecked")
     private void processConfluenceUpdate(String title, String prUrl, String author,
-                                         String repoOwner, String repoName, String status,
-                                         int prNumber, boolean includePropertyChanges) {
+                                         String repoOwner, String repoName, int prNumber,
+                                         String status, boolean includePropertyChanges) {
         try {
             String auth = Base64.getEncoder()
                     .encodeToString((email + ":" + apiToken)
@@ -97,13 +98,23 @@ public class ConfluenceService {
                 gh.setAccept(List.of(MediaType.APPLICATION_JSON));
                 List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
 
-                boolean hasProps = files.stream().anyMatch(f -> f.get("filename").toString().endsWith(".properties"));
-                if (hasProps) {
-                    Element propTable = ensurePropsTableExists(doc, bodyEl);
-                    Element tb = propTable.selectFirst("tbody");
-                    Element row = tb.appendElement("tr");
-                    row.appendElement("td").text(title);
-                    row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                boolean headingAdded = false;
+                Element propTable = ensurePropsTableExists(doc, bodyEl);
+                Element tb = propTable.selectFirst("tbody");
+
+                for (Map<String, Object> file : files) {
+                    String filename = file.get("filename").toString();
+                    if (filename.endsWith(".properties")) {
+                        if (!headingAdded) {
+                            bodyEl.appendElement("h2").text("Config Property File Changes");
+                            headingAdded = true;
+                        }
+                        String patch = file.get("patch") != null ? file.get("patch").toString() : "-";
+                        Element row = tb.appendElement("tr");
+                        row.appendElement("td").text(title);
+                        row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                        row.appendElement("td").text(patch);
+                    }
                 }
             }
 
@@ -141,6 +152,7 @@ public class ConfluenceService {
             Element head = t.appendElement("thead").appendElement("tr");
             head.appendElement("th").text("PR Title");
             head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Changes");
             t.appendElement("tbody");
             return t;
         });
