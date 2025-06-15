@@ -22,12 +22,7 @@ public class GitHubWebhookController {
     @PostMapping("/webhook")
     public ResponseEntity<String> handlePullRequest(@RequestBody Map<String, Object> payload) {
         String action = (String) payload.get("action");
-        logger.info("Received webhook with action: {}", action);
-
-        if (!"opened".equals(action)) {
-            logger.info("Ignored event with action: {}", action);
-            return ResponseEntity.ok("Ignored non-open PR event");
-        }
+        logger.info("Received GitHub PR webhook with action: {}", action);
 
         try {
             Map<String, Object> pr = (Map<String, Object>) payload.get("pull_request");
@@ -42,12 +37,24 @@ public class GitHubWebhookController {
 
             logger.info("Processing PR #{}: '{}' by {} in repo {}/{}", prNumber, title, author, repoOwner, repoName);
 
-            confluenceService.updateConfluencePage(title, url, author, repoOwner, repoName, prNumber);
+            // Handle PR states
+            if ("opened".equals(action)) {
+                confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, false, false);
+            } else if ("closed".equals(action)) {
+                boolean merged = (Boolean) pr.get("merged");
+                if (merged) {
+                    confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, true, true);
+                } else {
+                    // PR was closed without merge (cancelled)
+                    confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, false, true);
+                }
+            } else {
+                logger.info("No Confluence update required for action: {}", action);
+            }
 
-            logger.info("Successfully updated Confluence page for PR #{}", prNumber);
-            return ResponseEntity.ok("PR added to Confluence");
+            return ResponseEntity.ok("Webhook processed");
         } catch (Exception e) {
-            logger.error("Error processing webhook payload", e);
+            logger.error("Error processing webhook", e);
             return ResponseEntity.status(500).body("Internal Server Error");
         }
     }
