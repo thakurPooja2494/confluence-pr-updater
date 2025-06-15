@@ -49,6 +49,8 @@ public class ConfluenceService {
             String titleOnPage = (String) body.get("title");
             String htmlContent = (String) ((Map<String, Object>) ((Map<String, Object>) body.get("body")).get("storage")).get("value");
 
+            System.out.println("📝 Current Confluence page content:\n" + htmlContent);
+
             // 3. GitHub API call for PR files
             HttpHeaders gitHeaders = new HttpHeaders();
             gitHeaders.setBearerAuth(githubToken);
@@ -82,14 +84,11 @@ public class ConfluenceService {
             Document doc = Jsoup.parse(htmlContent);
             Element bodyEl = doc.body();
 
-            // Main PR table
-            Element prTable = doc.select("table").stream()
-                    .filter(t -> t.text().contains("PR Title") && t.text().contains("PR Link"))
-                    .findFirst()
-                    .orElse(null);
-
+            // Look for main PR table by class
+            Element prTable = doc.selectFirst("table.pr-table");
             if (prTable == null) {
-                prTable = bodyEl.appendElement("table");
+                // Create table and assign class for easier identification next time
+                prTable = bodyEl.appendElement("table").addClass("pr-table");
                 Element head = prTable.appendElement("thead").appendElement("tr");
                 head.appendElement("th").text("PR Title");
                 head.appendElement("th").text("Author");
@@ -104,17 +103,19 @@ public class ConfluenceService {
             newRow.appendElement("td").text(title);
             newRow.appendElement("td").text(author);
             newRow.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
-            newRow.appendElement("td").html(codeFileSummary.toString());
+
+            // If codeFileSummary is empty, put placeholder text
+            if (codeFileSummary.length() == 0) {
+                newRow.appendElement("td").text("No code file changes");
+            } else {
+                newRow.appendElement("td").html(codeFileSummary.toString());
+            }
 
             // Config changes table
             if (configFileRows.length() > 0) {
-                Element configTable = doc.select("table").stream()
-                        .filter(t -> t.text().contains("File Name") && t.text().contains("Changes Summary"))
-                        .findFirst()
-                        .orElse(null);
-
+                Element configTable = doc.selectFirst("table.config-table");
                 if (configTable == null) {
-                    configTable = bodyEl.appendElement("table");
+                    configTable = bodyEl.appendElement("table").addClass("config-table");
                     Element header = configTable.appendElement("thead").appendElement("tr");
                     header.appendElement("th").text("File Name");
                     header.appendElement("th").text("PR Title");
@@ -127,12 +128,12 @@ public class ConfluenceService {
                 configBody.append(configFileRows.toString());
             }
 
-            // Final payload
+            // 5. Prepare payload with updated full HTML
             Map<String, Object> payload = Map.of(
                     "id", pageId,
                     "type", "page",
                     "title", titleOnPage,
-                    "body", Map.of("storage", Map.of("value", doc.body().html(), "representation", "storage")),
+                    "body", Map.of("storage", Map.of("value", doc.html(), "representation", "storage")),
                     "version", Map.of("number", version + 1)
             );
 
