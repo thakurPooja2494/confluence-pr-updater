@@ -12,7 +12,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 public class ConfluenceService {
@@ -66,11 +65,12 @@ public class ConfluenceService {
             Document doc = Jsoup.parse(html);
             Element bodyEl = doc.body();
 
-            // PR Table
-            boolean prHeadingExists = doc.select("h2.pr-summary-heading").size() > 0;
-            if (!prHeadingExists) {
-                bodyEl.appendElement("h2").addClass("pr-summary-heading").text("Pull Requests Summary");
+            // Insert PR Title if not exists
+            if (doc.select("h2:contains(Pull Requests Summary)").isEmpty()) {
+                bodyEl.appendElement("h2").text("Pull Requests Summary");
             }
+
+            // PR Table
             Element prTable = ensurePrTableExists(doc, bodyEl);
             Element prTbody = prTable.selectFirst("tbody");
             Element existing = prTbody.select("tr")
@@ -95,7 +95,7 @@ public class ConfluenceService {
                 }
             }
 
-            // Property File Changes Table
+            // Check for property file changes in PR
             if (includePropertyChanges) {
                 String api = String.format("https://api.github.com/repos/%s/%s/pulls/%d/files", repoOwner, repoName, prNumber);
                 HttpHeaders gh = new HttpHeaders();
@@ -103,35 +103,35 @@ public class ConfluenceService {
                 gh.setAccept(List.of(MediaType.APPLICATION_JSON));
                 List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
 
-                List<Map<String, Object>> propsFiles = files.stream()
-                        .filter(f -> f.get("filename").toString().endsWith(".properties"))
-                        .collect(Collectors.toList());
-
-                if (!propsFiles.isEmpty()) {
-                    boolean propsHeadingExists = doc.select("h2.config-props-heading").size() > 0;
-                    if (!propsHeadingExists) {
-                        bodyEl.appendElement("h2").addClass("config-props-heading").text("Config Property File Changes");
-                    }
-
-                    Element propTable = ensurePropsTableExists(doc, bodyEl);
-                    Element tb = propTable.selectFirst("tbody");
-
-                    for (Map<String, Object> f : propsFiles) {
-                        String patch = (String) f.get("patch");
+                for (Map<String, Object> file : files) {
+                    String filename = file.get("filename").toString();
+                    if (filename.endsWith(".properties")) {
+                        String patch = (String) file.get("patch");
                         if (patch == null) continue;
-                        String changes = patch.lines()
-                                .filter(l -> l.startsWith("+") && !l.startsWith("+++"))
-                                .map(l -> l.substring(1))
-                                .collect(Collectors.joining("<br/>"));
 
-                        Element row = tb.appendElement("tr");
-                        row.appendElement("td").text(title);
-                        row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
-                        row.appendElement("td").html(changes);
+                        StringBuilder changes = new StringBuilder();
+                        for (String line : patch.split("\n")) {
+                            if ((line.startsWith("+") || line.startsWith("-")) && !line.startsWith("+++") && !line.startsWith("---")) {
+                                changes.append(line).append("<br>");
+                            }
+                        }
+
+                        if (!changes.isEmpty()) {
+                            if (doc.select("h2:contains(Config Property File Changes)").isEmpty()) {
+                                bodyEl.appendElement("h2").text("Config Property File Changes");
+                            }
+                            Element propTable = ensurePropsTableExists(doc, bodyEl);
+                            Element tb = propTable.selectFirst("tbody");
+                            Element row = tb.appendElement("tr");
+                            row.appendElement("td").text(title);
+                            row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                            row.appendElement("td").html(changes.toString());
+                        }
                     }
                 }
             }
 
+            // Send updated content
             Map<String, Object> payload = Map.of(
                     "id", pageId,
                     "type", "page",
@@ -147,29 +147,27 @@ public class ConfluenceService {
     }
 
     private Element ensurePrTableExists(Document doc, Element bodyEl) {
-        Element table = doc.selectFirst("table.pr-table");
-        if (table != null) return table;
-
-        table = bodyEl.appendElement("table").addClass("pr-table");
-        Element head = table.appendElement("thead").appendElement("tr");
-        head.appendElement("th").text("PR Title");
-        head.appendElement("th").text("Author");
-        head.appendElement("th").text("PR Link");
-        head.appendElement("th").text("Status");
-        table.appendElement("tbody");
-        return table;
+        return doc.select("table.pr-table").stream().findFirst().orElseGet(() -> {
+            Element t = bodyEl.appendElement("table").addClass("pr-table");
+            Element head = t.appendElement("thead").appendElement("tr");
+            head.appendElement("th").text("PR Title");
+            head.appendElement("th").text("Author");
+            head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Status");
+            t.appendElement("tbody");
+            return t;
+        });
     }
 
     private Element ensurePropsTableExists(Document doc, Element bodyEl) {
-        Element table = doc.selectFirst("table.props-table");
-        if (table != null) return table;
-
-        table = bodyEl.appendElement("table").addClass("props-table");
-        Element head = table.appendElement("thead").appendElement("tr");
-        head.appendElement("th").text("PR Title");
-        head.appendElement("th").text("PR Link");
-        head.appendElement("th").text("Changes");
-        table.appendElement("tbody");
-        return table;
+        return doc.select("table.props-table").stream().findFirst().orElseGet(() -> {
+            Element t = bodyEl.appendElement("table").addClass("props-table");
+            Element head = t.appendElement("thead").appendElement("tr");
+            head.appendElement("th").text("PR Title");
+            head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Changes");
+            t.appendElement("tbody");
+            return t;
+        });
     }
 }
