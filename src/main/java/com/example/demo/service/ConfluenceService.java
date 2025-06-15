@@ -10,6 +10,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -17,149 +18,143 @@ public class ConfluenceService {
 
     @Value("${confluence.email}")
     private String email;
-
     @Value("${confluence.api.token}")
     private String apiToken;
-
     @Value("${confluence.workspace}")
     private String workspace;
-
     @Value("${confluence.page.id}")
     private String pageId;
 
+    @Value("${github.token}")
+    private String githubToken;
+
     private final RestTemplate restTemplate = new RestTemplate();
 
-    public void updatePullRequestInConfluence(String title,
-                                              String url,
-                                              String author,
-                                              String repoOwner,
-                                              String repoName,
-                                              int prNumber,
-                                              boolean isMerged,
-                                              boolean isClosed) {
-        String status;
-
-        if (isMerged) {
-            status = "Merged";
-        } else if (isClosed) {
-            status = "Closed";
-        } else {
-            status = "In Review";
-        }
-
-        updatePullRequestInConfluence(title, url, author, status, false);
+    public void updatePullRequestInConfluence(String title, String prUrl, String author,
+                                              String repoOwner, String repoName, int prNumber,
+                                              boolean isMerged, boolean isClosed) {
+        String status = isMerged ? "Merged" : (isClosed ? "Closed" : "In Review");
+        processConfluenceUpdate(title, prUrl, author, repoOwner, repoName, prNumber, status, !isClosed);
     }
 
     public void removePullRequestFromConfluence(String prUrl) {
-        updatePullRequestInConfluence(null, prUrl, null, null, true);
+        processConfluenceUpdate(null, prUrl, null, null, null, -1, null, false);
     }
 
-    private void updatePullRequestInConfluence(String title, String prUrl, String author, String status, boolean removeOnly) {
+    @SuppressWarnings("unchecked")
+    private void processConfluenceUpdate(String title, String prUrl, String author,
+                                         String repoOwner, String repoName, int prNumber,
+                                         String status, boolean includePropertyChanges) {
         try {
-            String auth = Base64.getEncoder().encodeToString((email + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
+            String auth = Base64.getEncoder()
+                    .encodeToString((email + ":" + apiToken)
+                            .getBytes(StandardCharsets.UTF_8));
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Basic " + auth);
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            String pageUrl = "https://" + workspace + ".atlassian.net/wiki/rest/api/content/" + pageId + "?expand=body.storage,version";
-            ResponseEntity<Map> getResponse = restTemplate.exchange(pageUrl, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+            String pageUrl = String.format("https://%s.atlassian.net/wiki/rest/api/content/%s?expand=body.storage,version", workspace, pageId);
+            ResponseEntity<Map> getRes = restTemplate.exchange(pageUrl, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+            Map<String, Object> body = getRes.getBody();
+            Number versionNumber = (Number) ((Map<String, Object>) body.get("version")).get("number");
+            int version = versionNumber.intValue();
 
-            Map<String, Object> body = getResponse.getBody();
-            int version = (int) ((Map<String, Object>) body.get("version")).get("number");
             String titleOnPage = (String) body.get("title");
-            String htmlContent = (String) ((Map<String, Object>) ((Map<String, Object>) body.get("body")).get("storage")).get("value");
+            String html = (String)((Map<?,?>)((Map<?,?>)body.get("body")).get("storage")).get("value");
 
-            Document doc = Jsoup.parse(htmlContent);
+            Document doc = Jsoup.parse(html);
             Element bodyEl = doc.body();
 
-            Element prTable = doc.select("table").stream()
-                    .filter(table -> {
-                        Element th = table.selectFirst("th");
-                        return th != null && th.text().equalsIgnoreCase("PR Title");
-                    })
-                    .findFirst()
-                    .orElse(null);
+            // PR Table
+            Element prTable = ensurePrTableExists(doc, bodyEl);
+            Element prTbody = prTable.selectFirst("tbody");
+            Element existing = prTbody.select("tr")
+                    .stream()
+                    .filter(r -> r.selectFirst("td a").attr("href").equals(prUrl))
+                    .findFirst().orElse(null);
 
-            if (prTable == null) {
-                prTable = bodyEl.appendElement("table").addClass("pr-table");
-                Element head = prTable.appendElement("thead").appendElement("tr");
-                head.appendElement("th").text("PR Title");
-                head.appendElement("th").text("Author");
-                head.appendElement("th").text("PR Link");
-                head.appendElement("th").text("Status");
-                prTable.appendElement("tbody");
+            if (status == null) {
+                if (existing != null) existing.remove();
             } else {
-                // Remove "Changes" column if it exists
-                Element headRow = prTable.selectFirst("thead tr");
-                if (headRow != null) {
-                    int index = 0;
-                    for (Element th : headRow.select("th")) {
-                        if (th.text().equalsIgnoreCase("Changes")) {
-                            int removeIndex = index;
-                            th.remove();
-                            // Remove matching column in all rows
-                            for (Element tr : prTable.select("tbody tr")) {
-                                if (tr.select("td").size() > removeIndex) {
-                                    tr.select("td").get(removeIndex).remove();
-                                }
-                            }
-                            break;
+                if (existing != null) {
+                    existing.select("td").get(0).text(title);
+                    existing.select("td").get(1).text(author);
+                    existing.select("td").get(2).selectFirst("a").text(prUrl);
+                    existing.select("td").get(3).text(status);
+                } else {
+                    Element row = prTbody.appendElement("tr");
+                    row.appendElement("td").text(title);
+                    row.appendElement("td").text(author);
+                    row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                    row.appendElement("td").text(status);
+                }
+            }
+
+            // Check for property file changes in PR
+            if (includePropertyChanges && prNumber > 0) {
+                String api = String.format("https://api.github.com/repos/%s/%s/pulls/%d/files", repoOwner, repoName, prNumber);
+                HttpHeaders gh = new HttpHeaders();
+                gh.setBearerAuth(githubToken);
+                gh.setAccept(List.of(MediaType.APPLICATION_JSON));
+                List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
+
+                boolean headingAdded = false;
+                Element propTable = ensurePropsTableExists(doc, bodyEl);
+                Element tb = propTable.selectFirst("tbody");
+
+                for (Map<String, Object> file : files) {
+                    String filename = file.get("filename").toString();
+                    if (filename.endsWith(".properties")) {
+                        if (!headingAdded) {
+                            bodyEl.appendElement("h2").text("Config Property File Changes");
+                            headingAdded = true;
                         }
-                        index++;
+                        String patch = file.get("patch") != null ? file.get("patch").toString() : "-";
+                        Element row = tb.appendElement("tr");
+                        row.appendElement("td").text(title);
+                        row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                        row.appendElement("td").text(patch);
                     }
                 }
             }
 
-            Element tbody = prTable.selectFirst("tbody");
-            if (tbody == null) {
-                tbody = prTable.appendElement("tbody");
-            }
-
-            Element existingRow = null;
-            for (Element row : tbody.select("tr")) {
-                Element link = row.select("td a").first();
-                if (link != null && prUrl.equals(link.attr("href"))) {
-                    existingRow = row;
-                    break;
-                }
-            }
-
-            if (removeOnly) {
-                if (existingRow != null) {
-                    existingRow.remove();
-                }
-            } else {
-                if (existingRow != null) {
-                    existingRow.select("td").get(0).text(title);
-                    existingRow.select("td").get(1).text(author);
-                    existingRow.select("td").get(2).select("a").first().attr("href", prUrl).text(prUrl);
-                    existingRow.select("td").get(3).text(status);
-                } else {
-                    Element newRow = tbody.appendElement("tr");
-                    newRow.appendElement("td").text(title);
-                    newRow.appendElement("td").text(author);
-                    newRow.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
-                    newRow.appendElement("td").text(status);
-                }
-            }
-
-            Map<String, Object> updatePayload = Map.of(
+            // Send updated content
+            Map<String, Object> payload = Map.of(
                     "id", pageId,
                     "type", "page",
                     "title", titleOnPage,
                     "body", Map.of("storage", Map.of("value", doc.html(), "representation", "storage")),
                     "version", Map.of("number", version + 1)
             );
+            restTemplate.exchange(pageUrl, HttpMethod.PUT, new HttpEntity<>(payload, headers), String.class);
 
-            restTemplate.exchange(
-                    "https://" + workspace + ".atlassian.net/wiki/rest/api/content/" + pageId,
-                    HttpMethod.PUT,
-                    new HttpEntity<>(updatePayload, headers),
-                    String.class
-            );
-
-        } catch (Exception e) {
+        } catch(Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private Element ensurePrTableExists(Document doc, Element bodyEl) {
+        return doc.select("table.pr-table").stream().findFirst().orElseGet(() -> {
+            Element t = bodyEl.appendElement("table").addClass("pr-table");
+            Element head = t.appendElement("thead").appendElement("tr");
+            head.appendElement("th").text("PR Title");
+            head.appendElement("th").text("Author");
+            head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Status");
+            t.appendElement("tbody");
+            return t;
+        });
+    }
+
+    private Element ensurePropsTableExists(Document doc, Element bodyEl) {
+        return doc.select("table.props-table").stream().findFirst().orElseGet(() -> {
+            Element t = bodyEl.appendElement("table").addClass("props-table");
+            Element head = t.appendElement("thead").appendElement("tr");
+            head.appendElement("th").text("PR Title");
+            head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Changes");
+            t.appendElement("tbody");
+            return t;
+        });
     }
 }
