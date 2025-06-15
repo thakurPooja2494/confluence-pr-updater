@@ -34,13 +34,13 @@ public class ConfluenceService {
     @SuppressWarnings("unchecked")
     public void updateConfluencePage(String title, String prUrl, String author, String repoOwner, String repoName, int pullNumber) {
         try {
-            // 1. Auth headers
+            // Basic Auth Header (email:apiToken) for Confluence
             String auth = Base64.getEncoder().encodeToString((email + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Basic " + auth);
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            // 2. Get current Confluence page content
+            // Get current Confluence page
             String pageUrl = "https://" + workspace + ".atlassian.net/wiki/rest/api/content/" + pageId + "?expand=body.storage,version";
             ResponseEntity<Map> getResponse = restTemplate.exchange(pageUrl, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
 
@@ -49,7 +49,7 @@ public class ConfluenceService {
             String titleOnPage = (String) body.get("title");
             String htmlContent = (String) ((Map<String, Object>) ((Map<String, Object>) body.get("body")).get("storage")).get("value");
 
-            // 3. GitHub API call for PR files
+            // Get PR files using GitHub token
             HttpHeaders gitHeaders = new HttpHeaders();
             gitHeaders.setBearerAuth(githubToken);
             gitHeaders.setAccept(List.of(MediaType.APPLICATION_JSON));
@@ -78,10 +78,10 @@ public class ConfluenceService {
                 }
             }
 
-            // 4. Modify HTML using Jsoup
             Document doc = Jsoup.parse(htmlContent);
             Element bodyEl = doc.body();
 
+            // Main PR table
             Element prTable = doc.selectFirst("table.pr-table");
             if (prTable == null) {
                 prTable = bodyEl.appendElement("table").addClass("pr-table");
@@ -90,7 +90,6 @@ public class ConfluenceService {
                 head.appendElement("th").text("Author");
                 head.appendElement("th").text("PR Link");
                 head.appendElement("th").text("Changes");
-
                 prTable.appendElement("tbody");
             }
 
@@ -100,10 +99,13 @@ public class ConfluenceService {
             newRow.appendElement("td").text(author);
             newRow.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
 
-            newRow.appendElement("td").html(
-                    codeFileSummary.length() > 0 ? codeFileSummary.toString() : "No code file changes"
-            );
+            if (codeFileSummary.length() == 0) {
+                newRow.appendElement("td").text("No code file changes");
+            } else {
+                newRow.appendElement("td").html(codeFileSummary.toString());
+            }
 
+            // Config file changes
             if (configFileRows.length() > 0) {
                 Element configTable = doc.selectFirst("table.config-table");
                 if (configTable == null) {
@@ -112,7 +114,6 @@ public class ConfluenceService {
                     header.appendElement("th").text("File Name");
                     header.appendElement("th").text("PR Title");
                     header.appendElement("th").text("Changes Summary");
-
                     configTable.appendElement("tbody");
                 }
 
@@ -120,7 +121,7 @@ public class ConfluenceService {
                 configBody.append(configFileRows.toString());
             }
 
-            // 5. Final PUT request to update Confluence
+            // Final payload for updating page
             Map<String, Object> payload = Map.of(
                     "id", pageId,
                     "type", "page",
