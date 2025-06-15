@@ -35,27 +35,32 @@ public class GitHubWebhookController {
             String repoName = (String) repo.get("name");
             String repoOwner = (String) ((Map<String, Object>) repo.get("owner")).get("login");
 
-            logger.info("Processing PR #{}: '{}' by {} in repo {}/{}", prNumber, title, author, repoOwner, repoName);
+            switch (action) {
+                case "opened":
+                case "reopened":
+                    logger.info("PR opened or reopened: marking as In Review");
+                    confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, false, false);
+                    break;
 
-            // Handle PR states
-            if ("opened".equals(action)) {
-                confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, false, false);
-            } else if ("closed".equals(action)) {
-                boolean merged = (Boolean) pr.get("merged");
-                if (merged) {
-                    confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, true, true);
-                } else {
-                    // PR was closed without merge (cancelled)
-                    confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, false, true);
-                }
-            } else {
-                logger.info("No Confluence update required for action: {}", action);
+                case "closed":
+                    boolean merged = (Boolean) pr.get("merged");
+                    if (merged) {
+                        logger.info("PR merged: updating status to Merged");
+                        confluenceService.updatePullRequestInConfluence(title, url, author, repoOwner, repoName, prNumber, true, true);
+                    } else {
+                        logger.info("PR closed without merge: removing from Confluence");
+                        confluenceService.removePullRequestFromConfluence(url);
+                    }
+                    break;
+
+                default:
+                    logger.info("Ignoring unsupported PR action: {}", action);
             }
 
-            return ResponseEntity.ok("Webhook processed");
+            return ResponseEntity.ok("Processed GitHub webhook for action: " + action);
         } catch (Exception e) {
-            logger.error("Error processing webhook", e);
-            return ResponseEntity.status(500).body("Internal Server Error");
+            logger.error("Failed to process PR webhook", e);
+            return ResponseEntity.status(500).body("Webhook processing failed");
         }
     }
 }
