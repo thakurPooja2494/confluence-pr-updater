@@ -15,18 +15,9 @@ public class GitHubWebhookController {
     public GitHubWebhookController(ConfluenceService confluenceService) {
         this.confluenceService = confluenceService;
     }
+
     @PostMapping("/webhook")
-    public ResponseEntity<String> handlePullRequest(@RequestBody Map<String, Object> payload,
-                                                    @RequestHeader("X-GitHub-Event") String event) {
-        if ("ping".equals(event)) {
-            System.out.println("📡 Received ping from GitHub.");
-            return ResponseEntity.ok("Ping received");
-        }
-
-        if (!"pull_request".equals(event)) {
-            return ResponseEntity.ok("Event ignored: " + event);
-        }
-
+    public ResponseEntity<String> handlePullRequest(@RequestBody Map<String, Object> payload) {
         String action = (String) payload.get("action");
         if (!"opened".equals(action)) {
             return ResponseEntity.ok("Ignored non-open PR event");
@@ -36,10 +27,14 @@ public class GitHubWebhookController {
         String title = (String) pr.get("title");
         String url = (String) pr.get("html_url");
         String author = (String) ((Map<String, Object>) pr.get("user")).get("login");
+        int prNumber = (int) pr.get("number");
 
-        confluenceService.updateConfluencePage(title, url, author);
+        Map<String, Object> repo = (Map<String, Object>) payload.get("repository");
+        String repoName = (String) repo.get("name");
+        String repoOwner = (String) ((Map<String, Object>) repo.get("owner")).get("login");
+
+        confluenceService.updateConfluencePage(title, url, author, repoOwner, repoName, prNumber);
 
         return ResponseEntity.ok("PR added to Confluence");
     }
-
 }
