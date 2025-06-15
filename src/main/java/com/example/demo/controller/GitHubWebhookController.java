@@ -13,7 +13,6 @@ import java.util.Map;
 public class GitHubWebhookController {
 
     private static final Logger logger = LoggerFactory.getLogger(GitHubWebhookController.class);
-
     private final ConfluenceService confluenceService;
 
     public GitHubWebhookController(ConfluenceService confluenceService) {
