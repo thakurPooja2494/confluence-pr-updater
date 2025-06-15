@@ -35,7 +35,7 @@ public class ConfluenceService {
     public void updateConfluencePage(String title, String prUrl, String author, String repoOwner, String repoName, int pullNumber) {
         try {
             // 1. Auth headers
-            String auth = Base64.getEncoder().encodeToString((email + ":" + "apiToken").getBytes(StandardCharsets.UTF_8));
+            String auth = Base64.getEncoder().encodeToString((email + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Basic " + auth);
             headers.setContentType(MediaType.APPLICATION_JSON);
