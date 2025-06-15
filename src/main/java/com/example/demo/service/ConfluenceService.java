@@ -40,7 +40,7 @@ public class ConfluenceService {
             headers.set("Authorization", "Basic " + auth);
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            // 2. Get current page content
+            // 2. Get current Confluence page content
             String pageUrl = "https://" + workspace + ".atlassian.net/wiki/rest/api/content/" + pageId + "?expand=body.storage,version";
             ResponseEntity<Map> getResponse = restTemplate.exchange(pageUrl, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
 
@@ -48,8 +48,6 @@ public class ConfluenceService {
             int version = (int) ((Map<String, Object>) body.get("version")).get("number");
             String titleOnPage = (String) body.get("title");
             String htmlContent = (String) ((Map<String, Object>) ((Map<String, Object>) body.get("body")).get("storage")).get("value");
-
-            System.out.println("📝 Current Confluence page content:\n" + htmlContent);
 
             // 3. GitHub API call for PR files
             HttpHeaders gitHeaders = new HttpHeaders();
@@ -80,14 +78,12 @@ public class ConfluenceService {
                 }
             }
 
-            // 4. Update page content
+            // 4. Modify HTML using Jsoup
             Document doc = Jsoup.parse(htmlContent);
             Element bodyEl = doc.body();
 
-            // Look for main PR table by class
             Element prTable = doc.selectFirst("table.pr-table");
             if (prTable == null) {
-                // Create table and assign class for easier identification next time
                 prTable = bodyEl.appendElement("table").addClass("pr-table");
                 Element head = prTable.appendElement("thead").appendElement("tr");
                 head.appendElement("th").text("PR Title");
@@ -104,14 +100,10 @@ public class ConfluenceService {
             newRow.appendElement("td").text(author);
             newRow.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
 
-            // If codeFileSummary is empty, put placeholder text
-            if (codeFileSummary.length() == 0) {
-                newRow.appendElement("td").text("No code file changes");
-            } else {
-                newRow.appendElement("td").html(codeFileSummary.toString());
-            }
+            newRow.appendElement("td").html(
+                    codeFileSummary.length() > 0 ? codeFileSummary.toString() : "No code file changes"
+            );
 
-            // Config changes table
             if (configFileRows.length() > 0) {
                 Element configTable = doc.selectFirst("table.config-table");
                 if (configTable == null) {
@@ -128,7 +120,7 @@ public class ConfluenceService {
                 configBody.append(configFileRows.toString());
             }
 
-            // 5. Prepare payload with updated full HTML
+            // 5. Final PUT request to update Confluence
             Map<String, Object> payload = Map.of(
                     "id", pageId,
                     "type", "page",
