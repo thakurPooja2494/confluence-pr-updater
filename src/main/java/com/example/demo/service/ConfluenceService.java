@@ -29,7 +29,6 @@ public class ConfluenceService {
 
     private final RestTemplate restTemplate = new RestTemplate();
 
-    // ✅ Public method used by controller
     public void updatePullRequestInConfluence(String title,
                                               String url,
                                               String author,
@@ -51,12 +50,10 @@ public class ConfluenceService {
         updatePullRequestInConfluence(title, url, author, status, false);
     }
 
-    // ✅ Used when PR is closed but not merged
     public void removePullRequestFromConfluence(String prUrl) {
         updatePullRequestInConfluence(null, prUrl, null, null, true);
     }
 
-    // 🔒 Core logic for updating/removing PR rows in Confluence table
     private void updatePullRequestInConfluence(String title, String prUrl, String author, String status, boolean removeOnly) {
         try {
             String auth = Base64.getEncoder().encodeToString((email + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
@@ -91,6 +88,26 @@ public class ConfluenceService {
                 head.appendElement("th").text("PR Link");
                 head.appendElement("th").text("Status");
                 prTable.appendElement("tbody");
+            } else {
+                // Remove "Changes" column if it exists
+                Element headRow = prTable.selectFirst("thead tr");
+                if (headRow != null) {
+                    int index = 0;
+                    for (Element th : headRow.select("th")) {
+                        if (th.text().equalsIgnoreCase("Changes")) {
+                            int removeIndex = index;
+                            th.remove();
+                            // Remove matching column in all rows
+                            for (Element tr : prTable.select("tbody tr")) {
+                                if (tr.select("td").size() > removeIndex) {
+                                    tr.select("td").get(removeIndex).remove();
+                                }
+                            }
+                            break;
+                        }
+                        index++;
+                    }
+                }
             }
 
             Element tbody = prTable.selectFirst("tbody");
