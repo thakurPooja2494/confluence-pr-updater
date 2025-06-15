@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class ConfluenceService {
@@ -38,7 +39,7 @@ public class ConfluenceService {
     }
 
     public void removePullRequestFromConfluence(String prUrl) {
-        processConfluenceUpdate(null, prUrl, null, null, null, 0, null, false);
+        processConfluenceUpdate(null, prUrl, null, null, null, -1, null, false);
     }
 
     @SuppressWarnings("unchecked")
@@ -65,24 +66,41 @@ public class ConfluenceService {
             Document doc = Jsoup.parse(html);
             Element bodyEl = doc.body();
 
-            // Ensure property table and title come first
-            Element propertySection = doc.selectFirst("h2:contains(Config Property File Changes)");
-            Element propsTable = doc.selectFirst("table.props-table");
+            // Add config table header before PR table if needed
+            ensureConfigSectionHeader(doc, bodyEl);
 
-            if (includePropertyChanges) {
-                if (propertySection == null) {
-                    propertySection = new Element("h2").text("Config Property File Changes");
-                    bodyEl.prependChild(propertySection);
-                }
+            // Check for property file changes in PR
+            if (includePropertyChanges && prNumber != -1) {
+                String api = String.format("https://api.github.com/repos/%s/%s/pulls/%d/files", repoOwner, repoName, prNumber);
+                HttpHeaders gh = new HttpHeaders();
+                gh.setBearerAuth(githubToken);
+                gh.setAccept(List.of(MediaType.APPLICATION_JSON));
+                List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
 
-                if (propsTable == null) {
-                    propsTable = new Element("table").addClass("props-table");
-                    Element head = propsTable.appendElement("thead").appendElement("tr");
-                    head.appendElement("th").text("PR Title");
-                    head.appendElement("th").text("PR Link");
-                    head.appendElement("th").text("Changes");
-                    propsTable.appendElement("tbody");
-                    propertySection.after(propsTable);
+                List<Map<String, Object>> propChanges = files.stream()
+                        .filter(f -> f.get("filename").toString().endsWith(".properties"))
+                        .collect(Collectors.toList());
+
+                if (!propChanges.isEmpty()) {
+                    Element propTable = ensurePropsTableExists(doc, bodyEl);
+                    Element tb = propTable.selectFirst("tbody");
+
+                    for (Map<String, Object> file : propChanges) {
+                        String patch = (String) file.get("patch");
+                        if (patch == null) continue;
+
+                        String changes = patch.lines()
+                                .filter(l -> l.startsWith("+") && !l.startsWith("+++"))
+                                .map(l -> l.substring(1))
+                                .collect(Collectors.joining("<br>"));
+
+                        if (!changes.isBlank()) {
+                            Element row = tb.appendElement("tr");
+                            row.appendElement("td").text(title);
+                            row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+                            row.appendElement("td").html(changes);
+                        }
+                    }
                 }
             }
 
@@ -111,26 +129,6 @@ public class ConfluenceService {
                 }
             }
 
-            // Check for property file changes in PR
-            if (includePropertyChanges) {
-                String api = String.format("https://api.github.com/repos/%s/%s/pulls/%d/files", repoOwner, repoName, prNumber);
-                HttpHeaders gh = new HttpHeaders();
-                gh.setBearerAuth(githubToken);
-                gh.setAccept(List.of(MediaType.APPLICATION_JSON));
-                List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
-
-                for (Map<String, Object> file : files) {
-                    String filename = file.get("filename").toString();
-                    if (filename.endsWith(".properties")) {
-                        String patch = file.get("patch") != null ? file.get("patch").toString() : "(no diff available)";
-                        Element row = propsTable.selectFirst("tbody").appendElement("tr");
-                        row.appendElement("td").text(title);
-                        row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
-                        row.appendElement("td").appendElement("pre").text(patch);
-                    }
-                }
-            }
-
             // Send updated content
             Map<String, Object> payload = Map.of(
                     "id", pageId,
@@ -146,6 +144,12 @@ public class ConfluenceService {
         }
     }
 
+    private void ensureConfigSectionHeader(Document doc, Element bodyEl) {
+        if (doc.select("h2:contains(Config Property File Changes)").isEmpty()) {
+            bodyEl.prependElement("h2").text("Config Property File Changes");
+        }
+    }
+
     private Element ensurePrTableExists(Document doc, Element bodyEl) {
         return doc.select("table.pr-table").stream().findFirst().orElseGet(() -> {
             Element t = bodyEl.appendElement("table").addClass("pr-table");
@@ -154,6 +158,18 @@ public class ConfluenceService {
             head.appendElement("th").text("Author");
             head.appendElement("th").text("PR Link");
             head.appendElement("th").text("Status");
+            t.appendElement("tbody");
+            return t;
+        });
+    }
+
+    private Element ensurePropsTableExists(Document doc, Element bodyEl) {
+        return doc.select("table.props-table").stream().findFirst().orElseGet(() -> {
+            Element t = bodyEl.prependElement("table").addClass("props-table");
+            Element head = t.appendElement("thead").appendElement("tr");
+            head.appendElement("th").text("PR Title");
+            head.appendElement("th").text("PR Link");
+            head.appendElement("th").text("Changes");
             t.appendElement("tbody");
             return t;
         });
