@@ -65,7 +65,7 @@ public class ConfluenceService {
             Document doc = Jsoup.parse(html);
             Element bodyEl = doc.body();
 
-            // Insert PR Title if not exists
+            // Insert PR Title if not exists update branch
             if (doc.select("h2:contains(Pull Requests Summary)").isEmpty()) {
                 bodyEl.appendElement("h2").text("Pull Requests Summary");
             }
