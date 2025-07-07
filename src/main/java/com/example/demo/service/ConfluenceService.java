@@ -1,8 +1,6 @@
 package com.example.demo.service;
 
 
-
-
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -206,6 +204,212 @@ public class ConfluenceService {
         return table;
     }
 }
+
+
+
+//import org.jsoup.Jsoup;
+//import org.jsoup.nodes.Document;
+//import org.jsoup.nodes.Element;
+//import org.springframework.beans.factory.annotation.Value;
+//import org.springframework.http.*;
+//import org.springframework.stereotype.Service;
+//import org.springframework.web.client.RestTemplate;
+//
+//import java.nio.charset.StandardCharsets;
+//import java.util.Base64;
+//import java.util.List;
+//import java.util.Map;
+//
+//@Service
+//public class ConfluenceService {
+//
+//    @Value("${confluence.email}")
+//    private String email;
+//    @Value("${confluence.api.token}")
+//    private String apiToken;
+//    @Value("${confluence.workspace}")
+//    private String workspace;
+//    @Value("${confluence.page.id}")
+//    private String pageId;
+//    @Value("${github.token}")
+//    private String githubToken;
+//
+//    private final RestTemplate restTemplate = new RestTemplate();
+//
+//    public void updatePullRequestInConfluence(String title, String prUrl, String author,
+//                                              String repoOwner, String repoName, int prNumber,
+//                                              boolean isMerged, boolean isClosed) {
+//        String status = isMerged ? "Merged" : (isClosed ? "Closed" : "In Review");
+//        processConfluenceUpdate(title, prUrl, author, repoOwner, repoName, prNumber, status, !isClosed);
+//    }
+//
+//    public void removePullRequestFromConfluence(String prUrl) {
+//        processConfluenceUpdate(null, prUrl, null, null, null, 0, null, false);
+//    }
+//
+//    @SuppressWarnings("unchecked")
+//    private void processConfluenceUpdate(String title, String prUrl, String author,
+//                                         String repoOwner, String repoName, int prNumber,
+//                                         String status, boolean includePropertyChanges) {
+//        try {
+//            String auth = Base64.getEncoder()
+//                    .encodeToString((email + ":" + apiToken)
+//                            .getBytes(StandardCharsets.UTF_8));
+//            HttpHeaders headers = new HttpHeaders();
+//            headers.set("Authorization", "Basic " + auth);
+//            headers.setContentType(MediaType.APPLICATION_JSON);
+//
+//            String pageUrl = String.format("https://%s.atlassian.net/wiki/rest/api/content/%s?expand=body.storage,version", workspace, pageId);
+//            ResponseEntity<Map> getRes = restTemplate.exchange(pageUrl, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+//            Map<String, Object> body = getRes.getBody();
+//            int version = ((Number) ((Map<String, Object>) body.get("version")).get("number")).intValue();
+//            String titleOnPage = (String) body.get("title");
+//            String html = (String)((Map<?,?>)((Map<?,?>)body.get("body")).get("storage")).get("value");
+//
+//            Document doc = Jsoup.parse(html);
+//            Element bodyEl = doc.body();
+//
+//            // Insert PR title if missing
+//            if (doc.select("h2:matchesOwn(^\\s*Pull Request\\(s\\)-\\s*$)").isEmpty()) {
+//                bodyEl.appendElement("h2").text("Pull Request(s)-");
+//            }
+//
+//            // Fetch PR metadata
+//            String description = "";
+//            String commitMessage = "";
+//            if (repoOwner != null && repoName != null && prNumber > 0) {
+//                HttpHeaders ghHeaders = new HttpHeaders();
+//                ghHeaders.setBearerAuth(githubToken);
+//                ghHeaders.setAccept(List.of(MediaType.APPLICATION_JSON));
+//
+//                Map<String, Object> prData = restTemplate.exchange(
+//                        String.format("https://api.github.com/repos/%s/%s/pulls/%d", repoOwner, repoName, prNumber),
+//                        HttpMethod.GET, new HttpEntity<>(ghHeaders), Map.class).getBody();
+//                if (prData != null) {
+//                    description = (String) prData.getOrDefault("body", "");
+//                }
+//
+//                List<Map<String, Object>> commits = restTemplate.exchange(
+//                        String.format("https://api.github.com/repos/%s/%s/pulls/%d/commits", repoOwner, repoName, prNumber),
+//                        HttpMethod.GET, new HttpEntity<>(ghHeaders), List.class).getBody();
+//                if (commits != null && !commits.isEmpty()) {
+//                    Map<String, Object> commit = (Map<String, Object>) commits.get(commits.size() - 1).get("commit");
+//                    commitMessage = (String) commit.get("message");
+//                }
+//            }
+//
+//            // PR table logic
+//            Element prTable = ensurePrTableExists(doc, bodyEl);
+//            Element prTbody = prTable.selectFirst("tbody");
+//            Element existing = prTbody.select("tr")
+//                    .stream()
+//                    .filter(r -> r.selectFirst("td a").attr("href").equals(prUrl))
+//                    .findFirst().orElse(null);
+//
+//            if (status == null) {
+//                if (existing != null) existing.remove();
+//            } else {
+//                String statusColor = status.equals("Merged") || status.equals("Closed") ? "green" : "blue";
+//                if (existing != null) {
+//                    existing.select("td").get(0).text(repoName);
+//                    existing.select("td").get(1).text(commitMessage);
+//                    existing.select("td").get(2).selectFirst("a").text(prUrl);
+//                    existing.select("td").get(3).text(description);
+//                    existing.select("td").get(4).html(String.format("<span style='color:%s'>%s</span>", statusColor, status));
+//                } else {
+//                    Element row = prTbody.appendElement("tr");
+//                    row.appendElement("td").text(repoName);
+//                    row.appendElement("td").text(commitMessage);
+//                    row.appendElement("td").appendElement("a").attr("href", prUrl).text(prUrl);
+//                    row.appendElement("td").text(description);
+//                    row.appendElement("td").html(String.format("<span style='color:%s'>%s</span>", statusColor, status));
+//                }
+//            }
+//
+//            // Property changes table
+//            if (includePropertyChanges) {
+//                String api = String.format("https://api.github.com/repos/%s/%s/pulls/%d/files", repoOwner, repoName, prNumber);
+//                HttpHeaders gh = new HttpHeaders();
+//                gh.setBearerAuth(githubToken);
+//                gh.setAccept(List.of(MediaType.APPLICATION_JSON));
+//                List<Map<String, Object>> files = restTemplate.exchange(api, HttpMethod.GET, new HttpEntity<>(gh), List.class).getBody();
+//
+//                for (Map<String, Object> file : files) {
+//                    String filename = file.get("filename").toString();
+//                    if (filename.endsWith(".properties")) {
+//                        String patch = (String) file.get("patch");
+//                        if (patch == null) continue;
+//
+//                        if (doc.select("h2:matchesOwn(^\\s*Config Property File Changes\\s*$)").isEmpty()) {
+//                            bodyEl.appendElement("h2").text("Config Property File Changes");
+//                        }
+//                        Element propTable = ensurePropsTableExists(doc, bodyEl);
+//                        Element tb = propTable.selectFirst("tbody");
+//
+//                        for (String line : patch.split("\n")) {
+//                            if ((line.startsWith("+") || line.startsWith("-")) && !line.startsWith("+++") && !line.startsWith("---")) {
+//                                String kv = line.substring(1).trim();
+//                                int idx = kv.indexOf('=');
+//                                if (idx == -1) continue;
+//                                String key = kv.substring(0, idx).trim();
+//                                String value = kv.substring(idx + 1).trim();
+//
+//                                Element row = tb.appendElement("tr");
+//                                row.appendElement("td").text(repoName);
+//                                row.appendElement("td").text(commitMessage);
+//                                row.appendElement("td").text(filename);
+//                                row.appendElement("td").text(key);
+//                                row.appendElement("td").text(value);
+//                            }
+//                        }
+//                    }
+//                }
+//            }
+//
+//            Map<String, Object> payload = Map.of(
+//                    "id", pageId,
+//                    "type", "page",
+//                    "title", titleOnPage,
+//                    "body", Map.of("storage", Map.of("value", doc.html(), "representation", "storage")),
+//                    "version", Map.of("number", version + 1)
+//            );
+//            restTemplate.exchange(pageUrl, HttpMethod.PUT, new HttpEntity<>(payload, headers), String.class);
+//
+//        } catch(Exception e) {
+//            e.printStackTrace();
+//        }
+//    }
+//
+//    private Element ensurePrTableExists(Document doc, Element bodyEl) {
+//        Element table = doc.selectFirst("table.pr-table");
+//        if (table == null) {
+//            table = bodyEl.appendElement("table").addClass("pr-table");
+//            Element head = table.appendElement("thead").appendElement("tr");
+//            head.appendElement("th").text("Module/Application");
+//            head.appendElement("th").text("Feature");
+//            head.appendElement("th").text("PR Link");
+//            head.appendElement("th").text("Remarks");
+//            head.appendElement("th").text("Status");
+//            table.appendElement("tbody");
+//        }
+//        return table;
+//    }
+//
+//    private Element ensurePropsTableExists(Document doc, Element bodyEl) {
+//        Element table = doc.selectFirst("table.props-table");
+//        if (table == null) {
+//            table = bodyEl.appendElement("table").addClass("props-table");
+//            Element head = table.appendElement("thead").appendElement("tr");
+//            head.appendElement("th").text("Module/Application");
+//            head.appendElement("th").text("Feature");
+//            head.appendElement("th").text("Property File");
+//            head.appendElement("th").text("CCM Key");
+//            head.appendElement("th").text("CCM Value");
+//            table.appendElement("tbody");
+//        }
+//        return table;
+//    }
+//}
 
 //
 //import org.jsoup.Jsoup;
